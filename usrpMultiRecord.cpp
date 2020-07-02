@@ -97,17 +97,20 @@ int main (int argc, char* argv[]){
 
 	// check for gps lock
 	uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked");
-	if (gps_locked.to_bool() and ref == "gpsdo") {
+	uhd::sensor_value_t ref_locked = usrp->get_mboard_sensor("ref_locked");
+	if (gps_locked.to_bool() and ref_locked.to_bool() and ref == "gpsdo") {
 		// Set to GPS time					
 		std::cout << "\nGPS LOCKED\n" << std::endl;
 		usrp->set_time_source("gpsdo");
 		usrp->set_clock_source("gpsdo");
-		
+
+        // Sync the GPS and USRP clocks
 		// TODO: I am not sure if we need to actually set this manually or whether the driver handles this for you??
 		// As I understand it from the documentation, its automatic: https://files.ettus.com/manual/page_sync.html
-		
+		// usrp->set_time_next_pps(uhd::time_spec_t(0.0)); // <- This doesnt work and I dont know why..
 		usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
-		std::this_thread::sleep_for (std::chrono::seconds(1));
+		std::this_thread::sleep_for(std::chrono::seconds(1));
+					  
 	} else {
 		// Set to unsynced time.
 		std::cout << "\nNO GPS LOCK\nSync to internal CPU instead\n" << std::endl;
@@ -196,7 +199,7 @@ int main (int argc, char* argv[]){
 		numSamplesToReceive = spb;
 	}
 	
-    std::vector<std::vector<float>> fileBuffers (numRxChannels, std::vector<float> (numSamplesToReceive));
+    std::vector<std::vector<float>> fileBuffers (numRxChannels, std::vector<float> (2*numSamplesToReceive));
 
 	// set the total number of samples to receive
 	int totalSamplesToReceive = rate * total_time;
@@ -259,7 +262,7 @@ int main (int argc, char* argv[]){
             // copying complex<float> values to a plain float vector - so 2 floats to copy for each complex sample
 			float* pDestination 			= fileBuffers[i].data();
 			std::complex<float>* pSource	= buffPtrs[i];
-			memcpy (pDestination, pSource, numNewSamples*sizeof(float));
+			memcpy (pDestination, pSource, 2 * numNewSamples * sizeof(float));
 			
 			// write buffer to file
 			// NOTE: currently this will just append to any existing file, this should be changed and improved.
@@ -267,7 +270,7 @@ int main (int argc, char* argv[]){
 			std::ofstream outfile;
 			std::string fileName(filePath + "_chan" + std::to_string (i) + ".bin"); 
 			outfile.open(fileName, std::ofstream::app);			
-			outfile.write(reinterpret_cast<char*> (fileBuffers[i].data()), numNewSamples * sizeof (float));
+			outfile.write(reinterpret_cast<char*> (fileBuffers[i].data()), 2 * numNewSamples * sizeof (float));
 			outfile.close();
 		}
 
