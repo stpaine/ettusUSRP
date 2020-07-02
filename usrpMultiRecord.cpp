@@ -78,7 +78,7 @@ int main (int argc, char* argv[]){
 	} else {
 		// Set references to GPSDO
 		size_t num_gps_locked = 0;
-		int wait_for_lock = 10;		
+		int wait_for_lock = 120;		
 		
 		// Wait for GPS lock
 		bool gps_locked = false;
@@ -93,23 +93,29 @@ int main (int argc, char* argv[]){
 				std::this_thread::sleep_for(std::chrono::seconds(1));
 			}
 		}
-			if (gps_locked) {
-				// Set to GPS time					
-				std::cout << "\nGPS LOCKED\n" << std::endl;
-				usrp->set_time_source("gpsdo");
-				usrp->set_clock_source("gpsdo");
-				uhd::time_spec_t gps_time = uhd::time_spec_t(int64_t(usrp->get_mboard_sensor("gps_time").to_int()));
-				usrp->set_time_next_pps(gps_time + 1.0);
-				std::this_thread::sleep_for (std::chrono::seconds(1));
-			} else {
-				// Set to unsynced time.
-				std::cout << "\nNO GPS LOCK\nSync to internal CPU instead\n" << std::endl;
-				// We need to reset the clock source to internal if GPS lock fails
-				usrp->set_clock_source ("internal");
-				usrp->set_time_source ("internal");
-				usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
-				std::this_thread::sleep_for (std::chrono::seconds(1));
-			}
+	}
+
+	// check for gps lock
+	uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked");
+	if (gps_locked.to_bool() and ref == "gpsdo") {
+		// Set to GPS time					
+		std::cout << "\nGPS LOCKED\n" << std::endl;
+		usrp->set_time_source("gpsdo");
+		usrp->set_clock_source("gpsdo");
+		
+		// TODO: I am not sure if we need to actually set this manually or whether the driver handles this for you??
+		// As I understand it from the documentation, its automatic: https://files.ettus.com/manual/page_sync.html
+		
+		usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
+		std::this_thread::sleep_for (std::chrono::seconds(1));
+	} else {
+		// Set to unsynced time.
+		std::cout << "\nNO GPS LOCK\nSync to internal CPU instead\n" << std::endl;
+		// We need to reset the clock source to internal if GPS lock fails
+		usrp->set_clock_source ("internal");
+		usrp->set_time_source ("internal");
+		usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
+		std::this_thread::sleep_for (std::chrono::seconds(1));
 	}
 	
 	// setup the sub device
@@ -216,7 +222,6 @@ int main (int argc, char* argv[]){
 	metadata.open(fileName);
 	
 	// TODO: Need the EPOCH parser
-	uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked");
 	uhd::sensor_value_t NMEA = usrp->get_mboard_sensor("gps_gpgga");
 	metadata << boost::format("Clock Reference: %s") % ref << std::endl;
 	if (gps_locked.to_bool()) {
