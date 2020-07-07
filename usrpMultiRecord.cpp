@@ -28,9 +28,9 @@ int main (int argc, char* argv[]){
     system("./usrp_x300_init.sh");
 
 	//variables to be set by po
-    std::string devAddresses, file, type, ref;
-    size_t total_num_samps, spb;
-    double rate, freq, gain, bw, total_time, setup_time;
+    std::string devAddresses, file, ref;
+    size_t total_num_samps, spb, numChannels;
+    double rate, freq, gain, bw, total_time, setup_time, wait_for_lock;
 	uhd::rx_metadata_t md;
 	
     //setup the program options
@@ -39,12 +39,13 @@ int main (int argc, char* argv[]){
         ("help", "help message")
         ("dev", po::value<std::string>(&devAddresses)->default_value("addr0=192.168.40.2"), "multi uhd device address args")
         ("file", po::value<std::string>(&file)->default_value("usrp_samples.bin"), "name of the file to write binary samples to")
-        ("type", po::value<std::string>(&type)->default_value("float"), "sample type: double, float, or short")
         ("nsamps", po::value<size_t>(&total_num_samps), "total number of samples to receive")
+		("chan", po::value<size_t>(&numChannels)->default_value(4), "number of channels to record")
         ("duration", po::value<double>(&total_time)->default_value(0), "total number of seconds to receive")
         ("spb", po::value<size_t>(&spb), "samples per buffer")
         ("rate", po::value<double>(&rate)->default_value(0.0), "rate of incoming samples")
         ("freq", po::value<double>(&freq)->default_value(0.0), "RF center frequency in Hz")
+		("wait", po::value<double>(&wait_for_lock)->default_value(120), "wait time for gps lock")
         ("gain", po::value<double>(&gain)->default_value(0.0), "gain for the RF chain")
         ("bw", po::value<double>(&bw)->default_value(0.0), "analog frontend filter bandwidth in Hz")
         ("ref", po::value<std::string>(&ref)->default_value("gpsdo"), "reference source (gpsdo, internal, external, mimo)")
@@ -57,28 +58,47 @@ int main (int argc, char* argv[]){
     //print the help message
     if (vm.count("help")) {
         std::cout << boost::format("Rx multi samples to file %s") % desc << std::endl;
-        std::cout
-            << std::endl
-            << "This application streams data from a USRP x300 with two TwinRXs to file.\n"
-            << std::endl;
+        std::cout << std::endl << "This application streams data from a USRP x300 with two TwinRXs to file.\n" << std::endl;
         return ~0;
     }
-
+	
     // construct a multi usrp from the device adresses
     std::cout << "\nConstructing the multi USRP object" << std::endl;
     uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make (devAddresses);
 	
-    // clocking and syncing
+	// setup the sub device and antenna ports to be used with each channel
+	// daughterboard A (port, channel number)
+	// daughterboard B (port, channel number)
+	if (numChannels == 1) {
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0"), 0);
+		usrp->set_rx_antenna ("RX1",0);	
+	} else if (numChannels == 2) {
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1"), 0);
+		usrp->set_rx_antenna ("RX1",0);
+		usrp->set_rx_antenna ("RX2",1);	
+	} else if (numChannels == 3) {
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0"), 0);
+		usrp->set_rx_antenna ("RX1",0);
+		usrp->set_rx_antenna ("RX2",1);
+		usrp->set_rx_antenna ("RX1",2);
+	} else {
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0 B:1"), 0);
+		usrp->set_rx_antenna ("RX1",0);
+		usrp->set_rx_antenna ("RX2",1);
+		usrp->set_rx_antenna ("RX1",2);
+		usrp->set_rx_antenna ("RX2",3);
+	}	
+	
+	// clocking and syncing
 	if(vm.count("ref") and ref != "gpsdo") {
-		usrp->set_clock_source (ref);
 		std::cout << "Setting device timestamp" << std::endl;
+		usrp->set_clock_source (ref);
 		usrp->set_time_source (ref);
 		usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
 		std::this_thread::sleep_for (std::chrono::seconds(1));
 	} else {
 		// Set references to GPSDO
 		size_t num_gps_locked = 0;
-		int wait_for_lock = 120;		
 		
 		// Wait for GPS lock
 		bool gps_locked = false;
@@ -103,14 +123,13 @@ int main (int argc, char* argv[]){
 		std::cout << "\nGPS LOCKED\n" << std::endl;
 		usrp->set_time_source("gpsdo");
 		usrp->set_clock_source("gpsdo");
-
-        // Sync the GPS and USRP clocks
+		
+		// Sync the GPS and USRP clocks
 		// TODO: I am not sure if we need to actually set this manually or whether the driver handles this for you??
 		// As I understand it from the documentation, its automatic: https://files.ettus.com/manual/page_sync.html
 		// usrp->set_time_next_pps(uhd::time_spec_t(0.0)); // <- This doesnt work and I dont know why..
 		usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
-		std::this_thread::sleep_for(std::chrono::seconds(1));
-					  
+		std::this_thread::sleep_for(std::chrono::seconds(1));			  
 	} else {
 		// Set to unsynced time.
 		std::cout << "\nNO GPS LOCK\nSync to internal CPU instead\n" << std::endl;
@@ -121,85 +140,81 @@ int main (int argc, char* argv[]){
 		std::this_thread::sleep_for (std::chrono::seconds(1));
 	}
 	
-	// setup the sub device
-	usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0 B:1"), 0);
-	
-	// setup the antenna ports to be used with each channel
-	// daughterboard A (port, channel number)
-	usrp->set_rx_antenna ("RX1",0);
-	usrp->set_rx_antenna ("RX2",1);
-	// daughterboard B (port, channel number)
-	usrp->set_rx_antenna ("RX1",2);
-	usrp->set_rx_antenna ("RX2",3);
-
 	//set the center frequency
     std::cout << boost::format("\nSetting RX Freq: %f MHz...") % (freq/1e6) << std::endl;
     uhd::tune_request_t tune_request(freq);
-    if(vm.count("int-n")) tune_request.args = uhd::device_addr_t("mode_n=integer");
-    usrp->set_rx_freq(tune_request);
-    std::cout << boost::format("Actual RX Freq: %f MHz...") % (usrp->get_rx_freq()/1e6) << std::endl << std::endl;
+    if(vm.count("int-n")) {
+		tune_request.args = uhd::device_addr_t("mode_n=integer");
+	}
+	// We need to address and setup each channel
+	for (unsigned int i = 0; i < numChannels; i++) {
+		usrp->set_rx_freq(tune_request,i);
+		std::cout << boost::format("Actual Ch %i RX Freq: %f MHz...") % i % (usrp->get_rx_freq(i)/1e6) << std::endl;
+	} std::cout << std::endl;
 
     //set the sample rate
     if (rate <= 0.0){
         std::cerr << "Please specify a valid sample rate" << std::endl;
         return ~0;
     }
-    std::cout << boost::format("Setting RX Rate: %f Msps...") % (rate/1e6) << std::endl;
-    usrp->set_rx_rate(rate);
-    std::cout << boost::format("Actual RX Rate: %f Msps...") % (usrp->get_rx_rate()/1e6) << std::endl << std::endl;
+    std::cout << boost::format("Setting RX Rate: %f Msps...") % (rate/1e6) << std::endl << std::endl;
+	// We need to address and setup each channel
+	for (unsigned int i = 0; i < numChannels; i++) {
+		usrp->set_rx_rate(rate,i);
+		std::cout << boost::format("Actual Ch %i RX Rate: %f Msps...") % i % (usrp->get_rx_rate(i)/1e6) << std::endl;
+	} std::cout << std::endl;
 	
 	//set the IF filter bandwidth, by default it is set to the sampling rate
 	if (bw <= 0.0) {
 		bw = rate;
 	}
-	std::cout << boost::format("Setting RX Bandwidth: %f MHz...") % (bw/1e6) << std::endl;
-	usrp->set_rx_bandwidth(bw,0);
-	usrp->set_rx_bandwidth(bw,1);
-	usrp->set_rx_bandwidth(bw,2);
-	usrp->set_rx_bandwidth(bw,3);
-	std::cout << boost::format("Actual RX Bandwidth: %f MHz...") % (usrp->get_rx_bandwidth()/1e6) << std::endl << std::endl;
+	std::cout << boost::format("Setting RX Bandwidth: %f MHz...") % (bw/1e6) << std::endl << std::endl;
+	for (unsigned int i = 0; i < numChannels; i++) {
+		usrp->set_rx_bandwidth(bw,i);
+		std::cout << boost::format("Actual Ch %i RX Bandwidth: %f MHz...") % i % (usrp->get_rx_bandwidth(i)/1e6) << std::endl;
+	} std::cout << std::endl;
 		
-    //set the rf gain, the default gain is 0
-	std::cout << boost::format("Setting RX Gain: %f dB...") % gain << std::endl;
-	usrp->set_rx_gain (gain,0);
-	usrp->set_rx_gain (gain,1);
-	usrp->set_rx_gain (gain,2);
-	usrp->set_rx_gain (gain,3);
-    std::cout << boost::format("Actual RX Gain: %f dB...") % usrp->get_rx_gain() << std::endl << std::endl;
+    //set the rf gain for each channel
+	std::cout << boost::format("Setting RX Gain: %f dB...") % gain << std::endl << std::endl;
+	for (unsigned int i = 0; i < numChannels; i++) {
+		usrp->set_rx_gain (gain,i);
+		std::cout << boost::format("Actual RX Gain: %f dB...") % usrp->get_rx_gain(i) << std::endl;
+	} std::cout << std::endl;
  	
     // give the device a little bit of time to configure
     std::this_thread::sleep_for (std::chrono::milliseconds(100));
     
     // this will map the subdevice inputs to the input channels and create the input stream
-    uhd::stream_args_t rxStreamArgs ("fc32", "sc16");
-    rxStreamArgs.channels.push_back(0);
-    rxStreamArgs.channels.push_back(1);
-    rxStreamArgs.channels.push_back(2);
-    rxStreamArgs.channels.push_back(3);
+    uhd::stream_args_t rxStreamArgs ("sc16");
+	for (unsigned int i = 0; i < numChannels; i++) {
+		rxStreamArgs.channels.push_back(i);
+	}
     uhd::rx_streamer::sptr rxStream = usrp->get_rx_stream (rxStreamArgs);
-    
+	
     // print some general information
-    int numRxChannels = rxStream->get_num_channels();
+    unsigned int numRxChannels = rxStream->get_num_channels();
     std::cout << "Set up RX stream. Num input channels: " << numRxChannels << std::endl;
     std::cout << usrp->get_pp_string();
     
     // allocate buffers to receive with samples (one buffer per channel)
     const int samplesPerBuffer = rxStream->get_max_num_samps();
-    std::vector<std::vector<std::complex<float>>> buffs (numRxChannels, std::vector<std::complex<float>> (samplesPerBuffer));
-    std::cout << "Allocated " << numRxChannels << " buffers with " << samplesPerBuffer << " complex float samples" << std::endl;
+    std::vector<std::vector<std::complex<short>>> buffs (numRxChannels, std::vector<std::complex<short>> (samplesPerBuffer));
+    std::cout << "Allocated " << numRxChannels << " buffers with " << samplesPerBuffer << " complex short samples" << std::endl;
 
     // create a vector of pointers to point to each of the channel buffers
-    std::vector<std::complex<float> *> buffPtrs;
-    for (int i = 0; i < buffs.size(); i++) 
-        buffPtrs.push_back(buffs[i].data());
+    std::vector<std::complex<short> *> buffPtrs;
+    for (unsigned int i = 0; i < buffs.size(); i++) {
+        //buffPtrs.push_back(buffs[i].data());
+		buffPtrs.push_back(&buffs[i].front());
+	}
         
-    // allocate one big plain float buffer per channel for the final channels to store to disk
+    // allocate one big plain short buffer per channel for the final channels to store to disk
 	int numSamplesToReceive = samplesPerBuffer;
     if (vm.count("spb")) {
 		numSamplesToReceive = spb;
 	}
 	
-    std::vector<std::vector<float>> fileBuffers (numRxChannels, std::vector<float> (2*numSamplesToReceive));
+    std::vector<std::vector<short>> fileBuffers (numRxChannels, std::vector<short> (2*numSamplesToReceive));
 
 	// set the total number of samples to receive
 	int totalSamplesToReceive = rate * total_time;
@@ -226,6 +241,7 @@ int main (int argc, char* argv[]){
 	
 	// TODO: Need the EPOCH parser
 	uhd::sensor_value_t NMEA = usrp->get_mboard_sensor("gps_gpgga");
+	metadata << boost::format("Device: %s") % devAddresses << std::endl;
 	metadata << boost::format("Clock Reference: %s") % ref << std::endl;
 	if (gps_locked.to_bool()) {
 		uhd::sensor_value_t gps_time = usrp->get_mboard_sensor("gps_time");
@@ -258,20 +274,19 @@ int main (int argc, char* argv[]){
 		// request new data from the uhd driver
         size_t numNewSamples = rxStream->recv(buffPtrs, numSamplesForThisBlock, rxMetadata);
         // copy the received samples to the file buffer
-        for (int i = 0; i < numRxChannels; i++) {
-            // copying complex<float> values to a plain float vector - so 2 floats to copy for each complex sample
-			float* pDestination 			= fileBuffers[i].data();
-			std::complex<float>* pSource	= buffPtrs[i];
-			memcpy (pDestination, pSource, 2 * numNewSamples * sizeof(float));
+        for (unsigned int i = 0; i < numRxChannels; i++) {
+            // copying complex<short> values to a plain short vector - so 2 shorts to copy for each complex sample
+			short* pDestination 			= fileBuffers[i].data();
+			std::complex<short>* pSource	= buffPtrs[i];
+			memcpy (pDestination, pSource, 2 * numNewSamples * sizeof(short));
 			
 			// write buffer to file
-			// NOTE: currently this will just append to any existing file, this should be changed and improved.
+			// NOTE: currently this is a terrible implementation and will just append to any existing file, this should be fixed
 			std::string filePath (file);
 			std::ofstream outfile;
 			std::string fileName(filePath + "_chan" + std::to_string (i) + ".bin"); 
-			outfile.open(fileName, std::ofstream::app);			
-			outfile.write(reinterpret_cast<char*> (fileBuffers[i].data()), 2 * numNewSamples * sizeof (float));
-			outfile.close();
+			outfile.open(fileName, std::ofstream::app);
+			outfile.write(reinterpret_cast<char*> (fileBuffers[i].data()), 2 * numNewSamples * sizeof (short));
 		}
 
 /*
@@ -291,6 +306,6 @@ int main (int argc, char* argv[]){
 		// NOTE: for some reason, this does not always update, this should be investigated
 		numSamplesReceived += numNewSamples;
     }
-	std::cout << "\nStopped Recording" << std::endl;
+	std::cout << "\nFinished Recording" << std::endl;
     return 0;
 }
