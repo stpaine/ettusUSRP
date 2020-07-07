@@ -16,7 +16,6 @@
 #include <uhd/utils/thread.hpp>
 
 namespace po = boost::program_options;
-
 //==============================================================================
 
 int main (int argc, char* argv[]){
@@ -37,10 +36,10 @@ int main (int argc, char* argv[]){
     po::options_description desc("Allowed options");
     desc.add_options()
         ("help", "help message")
-        ("dev", po::value<std::string>(&devAddresses)->default_value("addr0=192.168.40.2"), "multi uhd device address args")
+        ("dev", po::value<std::string>(&devAddresses)->default_value("addr0=192.168.40.2"), "multi uhd device address args (dev=addr0=192.168.40.2, addr1=192.168.50.2)")
         ("file", po::value<std::string>(&file)->default_value("usrp_samples.bin"), "name of the file to write binary samples to")
         ("nsamps", po::value<size_t>(&total_num_samps), "total number of samples to receive")
-		("chan", po::value<size_t>(&numChannels)->default_value(4), "number of channels to record")
+		("chan", po::value<size_t>(&numChannels)->default_value(1), "number of channels to record")
         ("duration", po::value<double>(&total_time)->default_value(0), "total number of seconds to receive")
         ("spb", po::value<size_t>(&spb), "samples per buffer")
         ("rate", po::value<double>(&rate)->default_value(0.0), "rate of incoming samples")
@@ -62,13 +61,18 @@ int main (int argc, char* argv[]){
         return ~0;
     }
 	
+	if (devAddresses.length() > 20 and numChannels < 5) {
+		std::cout << "\nYou have specified two USRPs but using less than 4 channels please select a single USRP\n" << std::endl;
+		return ~0;
+	}
+	
     // construct a multi usrp from the device adresses
     std::cout << "\nConstructing the multi USRP object" << std::endl;
     uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make (devAddresses);
 	
 	// setup the sub device and antenna ports to be used with each channel
-	// daughterboard A (port, channel number)
-	// daughterboard B (port, channel number)
+	// subdev_spec_t((daughterboard, daughterboard channel),URSP Number))
+	// set_rx_antenna(port, system channel)
 	if (numChannels == 1) {
 		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0"), 0);
 		usrp->set_rx_antenna ("RX1",0);	
@@ -81,13 +85,54 @@ int main (int argc, char* argv[]){
 		usrp->set_rx_antenna ("RX1",0);
 		usrp->set_rx_antenna ("RX2",1);
 		usrp->set_rx_antenna ("RX1",2);
-	} else {
+	} else if (numChannels == 4) {
 		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0 B:1"), 0);
 		usrp->set_rx_antenna ("RX1",0);
 		usrp->set_rx_antenna ("RX2",1);
 		usrp->set_rx_antenna ("RX1",2);
 		usrp->set_rx_antenna ("RX2",3);
-	}	
+	} else if (numChannels == 5) {
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0 B:1"), 0);
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0"), 1);
+		usrp->set_rx_antenna ("RX1",0);
+		usrp->set_rx_antenna ("RX2",1);
+		usrp->set_rx_antenna ("RX1",2);
+		usrp->set_rx_antenna ("RX2",3);
+		usrp->set_rx_antenna ("RX1",4);
+	} else if (numChannels == 6) {
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0 B:1"), 0);
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1"), 1);
+		usrp->set_rx_antenna ("RX1",0);
+		usrp->set_rx_antenna ("RX2",1);
+		usrp->set_rx_antenna ("RX1",2);
+		usrp->set_rx_antenna ("RX2",3);	
+		usrp->set_rx_antenna ("RX1",4);
+		usrp->set_rx_antenna ("RX2",5);
+	} else if (numChannels == 7) {
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0 B:1"), 0);
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0"), 1);
+		usrp->set_rx_antenna ("RX1",0);
+		usrp->set_rx_antenna ("RX2",1);
+		usrp->set_rx_antenna ("RX1",2);
+		usrp->set_rx_antenna ("RX2",3);
+		usrp->set_rx_antenna ("RX1",4);
+		usrp->set_rx_antenna ("RX2",5);
+		usrp->set_rx_antenna ("RX1",6);
+	} else if (numChannels == 8) {
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0 B:1"), 0);
+		usrp->set_rx_subdev_spec(uhd::usrp::subdev_spec_t("A:0 A:1 B:0 B:1"), 1);
+		usrp->set_rx_antenna ("RX1",0);
+		usrp->set_rx_antenna ("RX2",1);
+		usrp->set_rx_antenna ("RX1",2);
+		usrp->set_rx_antenna ("RX2",3);
+		usrp->set_rx_antenna ("RX1",4);
+		usrp->set_rx_antenna ("RX2",5);
+		usrp->set_rx_antenna ("RX1",6);
+		usrp->set_rx_antenna ("RX2",7);
+	} else {
+		std::cout << "\nPlease select a valid number of channels\n" << std::endl;
+		return ~0;
+	}
 	
 	// clocking and syncing
 	if(vm.count("ref") and ref != "gpsdo") {
@@ -258,10 +303,13 @@ int main (int argc, char* argv[]){
 	metadata << boost::format("Lat: %s") % NMEA.to_pp_string() << std::endl;
 	metadata << boost::format("Lon: %s") % NMEA.to_pp_string() << std::endl;
 	metadata << boost::format("Channels: %i") % numRxChannels << std::endl;
-	metadata << boost::format("Fc: %f [MHz]") % (usrp->get_rx_freq()/1e6) << std::endl;
-	metadata << boost::format("BW: %f [MHz]") % (usrp->get_rx_bandwidth()/1e6) << std::endl;
-	metadata << boost::format("Fs: %f [Msps]") % (usrp->get_rx_rate()/1e6) << std::endl;
-	metadata << boost::format("Gain: %f [dB]") % (usrp->get_rx_gain()) << std::endl;
+	for (unsigned int i = 0; i < numRxChannels; i++) {
+		metadata << boost::format("Channel %i parameters:") % i << std::endl;
+		metadata << boost::format("Fc: %f [MHz]") % (usrp->get_rx_freq(i)/1e6) << std::endl;
+		metadata << boost::format("BW: %f [MHz]") % (usrp->get_rx_bandwidth(i)/1e6) << std::endl;
+		metadata << boost::format("Fs: %f [Msps]") % (usrp->get_rx_rate(i)/1e6) << std::endl;
+		metadata << boost::format("Gain: %f [dB]") % (usrp->get_rx_gain(i)) << std::endl;	
+	}
 	metadata.close();
 			
     while (numSamplesReceived < totalSamplesToReceive) {
