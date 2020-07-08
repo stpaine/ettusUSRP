@@ -27,7 +27,7 @@ int main (int argc, char* argv[]){
     system("./usrp_x300_init.sh");
 
 	//variables to be set by po
-    std::string devAddresses, file, ref;
+    std::string devAddresses, file, ref, pps;
     size_t total_num_samps, spb, numChannels;
     double rate, freq, gain, bw, total_time, setup_time, wait_for_lock;
 	uhd::rx_metadata_t md;
@@ -47,7 +47,8 @@ int main (int argc, char* argv[]){
 		("wait", po::value<double>(&wait_for_lock)->default_value(120), "wait time for gps lock")
         ("gain", po::value<double>(&gain)->default_value(0.0), "gain for the RF chain")
         ("bw", po::value<double>(&bw)->default_value(0.0), "analog frontend filter bandwidth in Hz")
-        ("ref", po::value<std::string>(&ref)->default_value("gpsdo"), "reference source (gpsdo, internal, external, mimo)")
+        ("pps", po::value<std::string>(&pps)->default_value("internal"), "pps source (gpsdo, internal, external)")
+		("ref", po::value<std::string>(&ref)->default_value("internal"), "reference source (gpsdo, internal, external)")
         ("setup", po::value<double>(&setup_time)->default_value(1.0), "seconds of setup time")
     ;
     po::variables_map vm;
@@ -133,60 +134,100 @@ int main (int argc, char* argv[]){
 		std::cout << "\nPlease select a valid number of channels\n" << std::endl;
 		return ~0;
 	}
+
+	double mcr0 = usrp->get_master_clock_rate(0);
+	std::cout << "\nMaster clock for USRP 1: " << mcr0 << std::endl;
+	if (numChannels > 4) {
+		double mcr1 = usrp->get_master_clock_rate(1);
+		std::cout << "Master clock for USRP 2: " << mcr1 << std::endl << std::endl;
+	}
 	
 	// clocking and syncing
-	if(vm.count("ref") and ref != "gpsdo") {
-		std::cout << "Setting device timestamp" << std::endl;
-		usrp->set_clock_source (ref);
-		usrp->set_time_source (ref);
-		usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
-		std::this_thread::sleep_for (std::chrono::seconds(1));
-	} else {
-		// Set references to GPSDO
+	if(ref == "gpsdo" or pps == "gpsdo") {
+		size_t num_mboards    = usrp->get_num_mboards();
 		size_t num_gps_locked = 0;
-		
-		// Wait for GPS lock
-		bool gps_locked = false;
-		// Wait 2 minutes for the clock to settle
-		std::cout << "\nWaiting for GPS lock\n" << std::flush;
-		for (int i = 0; i < wait_for_lock and not gps_locked; i++) {
-			gps_locked = usrp->get_mboard_sensor("gps_locked").to_bool();
-			if (gps_locked) {
-				num_gps_locked++;
+		for (size_t mboard = 0; mboard < num_mboards; mboard++) {
+			std::cout << "Synchronizing mboard " << mboard << ": " << usrp->get_mboard_name(mboard) << std::endl;			
+			// Wait for GPS lock
+			uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked", mboard);
+			// Wait 2 minutes for the clock to settle
+			std::cout << "\nWaiting for GPS lock\n" << std::flush;
+			for (int i = 0; i < wait_for_lock and not gps_locked.to_bool(); i++) {
+				gps_locked = usrp->get_mboard_sensor("gps_locked", mboard);
+				if (gps_locked.to_bool()) {
+					num_gps_locked++;
+				} else {
+					std::cout << i+1 << "/" << wait_for_lock << "\r" << std::flush;
+					std::this_thread::sleep_for(std::chrono::seconds(1));
+				}
+			}
+			
+			// check for gps and reference clock lock
+			gps_locked = usrp->get_mboard_sensor("gps_locked", mboard);
+			uhd::sensor_value_t ref_locked = usrp->get_mboard_sensor("ref_locked", mboard);
+			
+			if (gps_locked.to_bool() and ref_locked.to_bool()) {
+				// Set to GPS time
+				std::cout << "\nGPS LOCKED on mboard: " << mboard << std::endl << std::endl;
+				usrp->set_time_source(pps, mboard);
+				usrp->set_clock_source(ref, mboard);
+				
+				const uhd::time_spec_t last_pps_time = usrp->get_time_last_pps();
+				while (last_pps_time == usrp->get_time_last_pps()){
+					//sleep 100 milliseconds (give or take)
+					std::this_thread::sleep_for (std::chrono::milliseconds(50));
+				}
+				// Sync the GPS and USRP clocks
+				// TODO: I am not sure if we need to actually set this manually or whether the driver handles this for you??
+				// As I understand it from the documentation, its automatic: https://files.ettus.com/manual/page_sync.html
+				
+				// TODO: THIS DOES NOT WORK PROPERLY
+				// uhd::time_spec_t gps_time = uhd::time_spec_t(int64_t(usrp->get_mboard_sensor("gps_time", mboard).to_int()));
+				// usrp->set_time_next_pps(gps_time + 1, mboard);
+				// usrp->set_time_next_pps(uhd::time_spec_t(usrp->get_mboard_sensor("gps_time").to_int()+1.0), mboard);
+				
+				usrp->set_time_next_pps(uhd::time_spec_t(0.0), mboard);
+				
+				// TODO: This resyncs the two boards but this needs to be improved
+				if (mboard == 1) {
+					usrp->set_time_next_pps(uhd::time_spec_t(0.0), 0);
+					usrp->set_time_next_pps(uhd::time_spec_t(0.0), 1);
+				}
+
 			} else {
-				std::cout << i+1 << "/" << wait_for_lock << "\r" << std::flush;
-				std::this_thread::sleep_for(std::chrono::seconds(1));
+				// Set to unsynced time.
+				std::cout << "\nNO GPS LOCK\n" << std::endl;
+				return ~0;
+			}
+		}	
+	} else {
+		size_t num_mboards = usrp->get_num_mboards();
+		for (size_t mboard = 0; mboard < num_mboards; mboard++) {
+			std::cout << "Setting device timestamp" << std::endl;
+			std::cout << "Synchronizing mboard " << mboard << ": " << usrp->get_mboard_name(mboard) << std::endl;
+			usrp->set_clock_source(ref, mboard);
+			usrp->set_time_source(pps, mboard);
+			// set_sync_source(device_addr_t("clock_source=$CLOCK_SOURCE,time_source=$TIME_SOURCE"))
+			const uhd::time_spec_t last_pps_time = usrp->get_time_last_pps();
+			while (last_pps_time == usrp->get_time_last_pps()){
+				//sleep 100 milliseconds (give or take)
+				std::this_thread::sleep_for (std::chrono::milliseconds(50));
+			}
+			// This command will be processed fairly soon after the last PPS edge:
+			usrp->set_time_next_pps(uhd::time_spec_t(0.0), mboard);
+			// TODO: This resyncs the two boards but this needs to be improved
+			if (mboard == 1) {
+				usrp->set_time_next_pps(uhd::time_spec_t(0.0), 0);
+				usrp->set_time_next_pps(uhd::time_spec_t(0.0), 1);
 			}
 		}
 	}
-
-	// check for gps lock
-	uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked");
-	uhd::sensor_value_t ref_locked = usrp->get_mboard_sensor("ref_locked");
-	if (gps_locked.to_bool() and ref_locked.to_bool() and ref == "gpsdo") {
-		// Set to GPS time					
-		std::cout << "\nGPS LOCKED\n" << std::endl;
-		usrp->set_time_source("gpsdo");
-		usrp->set_clock_source("gpsdo");
-		
-		// Sync the GPS and USRP clocks
-		// TODO: I am not sure if we need to actually set this manually or whether the driver handles this for you??
-		// As I understand it from the documentation, its automatic: https://files.ettus.com/manual/page_sync.html
-		// usrp->set_time_next_pps(uhd::time_spec_t(0.0)); // <- This doesnt work and I dont know why..
-		usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
-		std::this_thread::sleep_for(std::chrono::seconds(1));			  
-	} else {
-		// Set to unsynced time.
-		std::cout << "\nNO GPS LOCK\nSync to internal CPU instead\n" << std::endl;
-		// We need to reset the clock source to internal if GPS lock fails
-		usrp->set_clock_source ("internal");
-		usrp->set_time_source ("internal");
-		usrp->set_time_unknown_pps(uhd::time_spec_t(0.0));
-		std::this_thread::sleep_for (std::chrono::seconds(1));
-	}
+	
+	// Once set, we need to wait for the settings to propagate through the system
+	std::this_thread::sleep_for (std::chrono::seconds(1));
 	
 	//set the center frequency
-    std::cout << boost::format("\nSetting RX Freq: %f MHz...") % (freq/1e6) << std::endl;
+    std::cout << boost::format("\nSetting RX Freq: %f MHz...") % (freq/1e6) << std::endl << std::endl;
     uhd::tune_request_t tune_request(freq);
     if(vm.count("int-n")) {
 		tune_request.args = uhd::device_addr_t("mode_n=integer");
@@ -285,6 +326,7 @@ int main (int argc, char* argv[]){
 	metadata.open(fileName);
 	
 	// TODO: Need the EPOCH parser
+	uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked");
 	uhd::sensor_value_t NMEA = usrp->get_mboard_sensor("gps_gpgga");
 	metadata << boost::format("Device: %s") % devAddresses << std::endl;
 	metadata << boost::format("Clock Reference: %s") % ref << std::endl;
