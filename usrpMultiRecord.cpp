@@ -303,7 +303,7 @@ int main (int argc, char* argv[]){
     std::vector<std::vector<short>> fileBuffers (numRxChannels, std::vector<short> (2*numSamplesToReceive));
 
 	// set the total number of samples to receive
-	int totalSamplesToReceive = rate * total_time;
+	double totalSamplesToReceive = rate * total_time;
 	if (vm.count("nsamps")) {
 		totalSamplesToReceive = total_num_samps;
 	}
@@ -353,9 +353,9 @@ int main (int argc, char* argv[]){
 		metadata << boost::format("Gain: %f [dB]") % (usrp->get_rx_gain(i)) << std::endl;	
 	}
 	metadata.close();
-			
+	
     while (numSamplesReceived < totalSamplesToReceive) {
-        int numSamplesForThisBlock = totalSamplesToReceive - numSamplesReceived;
+        double numSamplesForThisBlock = totalSamplesToReceive - numSamplesReceived;
         // receive a complete buffer or the last missing samples
         if (numSamplesForThisBlock > samplesPerBuffer) {
             numSamplesForThisBlock = samplesPerBuffer;
