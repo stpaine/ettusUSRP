@@ -5,6 +5,7 @@
 #include <fstream>
 #include <csignal>
 #include <chrono>
+#include <ctime>
 
 #include <boost/program_options.hpp>
 #include <boost/format.hpp>
@@ -27,7 +28,7 @@ int main (int argc, char* argv[]){
     system("./usrp_x300_init.sh");
 
 	//variables to be set by po
-    std::string devAddresses, file, ref, pps;
+    std::string devAddresses, file, ref, pps, print_time;
     size_t total_num_samps, spb, numChannels;
     double rate, freq, gain, bw, total_time, setup_time, wait_for_lock;
 	uhd::rx_metadata_t md;
@@ -49,6 +50,7 @@ int main (int argc, char* argv[]){
         ("bw", po::value<double>(&bw)->default_value(0.0), "analog frontend filter bandwidth in Hz")
         ("pps", po::value<std::string>(&pps)->default_value("internal"), "pps source (gpsdo, internal, external)")
 		("ref", po::value<std::string>(&ref)->default_value("internal"), "reference source (gpsdo, internal, external)")
+		("print", po::value<std::string>(&print_time)->default_value("N"), "y/N")
         ("setup", po::value<double>(&setup_time)->default_value(1.0), "seconds of setup time")
     ;
     po::variables_map vm;
@@ -314,12 +316,12 @@ int main (int argc, char* argv[]){
     startCmd.time_spec = uhd::time_spec_t (1.9);
     rxStream->issue_stream_cmd(startCmd);
     
-    int numSamplesReceived = 0;
+    double numSamplesReceived = 0;
     uhd::rx_metadata_t rxMetadata;
-    std::cout << "Starting to receive" << std::endl;
+    std::cout << "Starting to receive\n" << std::endl;
     
     // Start receiving
-	// Write metadata to file	
+	// Write metadata to file		
 	std::string filePath (file);
 	std::ofstream metadata;
 	std::string fileName(filePath + "_metadata.txt");
@@ -328,6 +330,9 @@ int main (int argc, char* argv[]){
 	// TODO: Need the EPOCH parser
 	uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked");
 	uhd::sensor_value_t NMEA = usrp->get_mboard_sensor("gps_gpgga");
+	// Current system time
+	auto timenow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+	metadata << boost::format("System time at start: %s") % ctime(&timenow) << std::endl;
 	metadata << boost::format("Device: %s") % devAddresses << std::endl;
 	metadata << boost::format("Clock Reference: %s") % ref << std::endl;
 	if (gps_locked.to_bool()) {
@@ -339,11 +344,12 @@ int main (int argc, char* argv[]){
 		metadata << boost::format("Start time: %0.9f") % gps_time.get_real_secs() << std::endl;
 	}
 	metadata << boost::format("%s") % gps_locked.to_pp_string() << std::endl;
+	// TODO: parse NMEA data
+	metadata << boost::format("GPS NMEA: %s") % NMEA.to_pp_string() << std::endl;
+	//metadata << boost::format("Lat: %s") % NMEA.to_pp_string() << std::endl;
+	//metadata << boost::format("Lon: %s") % NMEA.to_pp_string() << std::endl;
 	metadata << boost::format("Duration: %i [s]") % total_time << std::endl;
 	metadata << boost::format("Total samples: %i") % totalSamplesToReceive << std::endl;
-	// TODO: parse NMEA data
-	metadata << boost::format("Lat: %s") % NMEA.to_pp_string() << std::endl;
-	metadata << boost::format("Lon: %s") % NMEA.to_pp_string() << std::endl;
 	metadata << boost::format("Channels: %i") % numRxChannels << std::endl;
 	for (unsigned int i = 0; i < numRxChannels; i++) {
 		metadata << boost::format("Channel %i parameters:") % i << std::endl;
@@ -354,11 +360,20 @@ int main (int argc, char* argv[]){
 	}
 	metadata.close();
 	
+	timenow = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+	std::cout << ctime(&timenow) << std::endl;
+	std::cout << "Total recording time: " << total_time << "s" << std::endl;
+
     while (numSamplesReceived < totalSamplesToReceive) {
         double numSamplesForThisBlock = totalSamplesToReceive - numSamplesReceived;
         // receive a complete buffer or the last missing samples
         if (numSamplesForThisBlock > samplesPerBuffer) {
             numSamplesForThisBlock = samplesPerBuffer;
+		}
+		
+		if (print_time == "y") {	
+			float progress = roundf(numSamplesReceived/totalSamplesToReceive*100);
+			std::cout << "Recording Progress: " << progress << "% \r" << std::flush;
 		}
 		
 		// request new data from the uhd driver
