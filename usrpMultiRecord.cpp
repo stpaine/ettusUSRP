@@ -29,8 +29,8 @@ int main (int argc, char* argv[]){
 
 	//variables to be set by po
     std::string devAddresses, file, ref, pps, print_time;
-    size_t total_num_samps, spb, numChannels;
-    double rate, freq, gain, bw, total_time, setup_time, wait_for_lock;
+    size_t total_num_samps, numChannels;
+    double rate, freq, gain, bw, total_time, spb, setup_time, wait_for_lock;
 	uhd::rx_metadata_t md;
 	
     //setup the program options
@@ -42,7 +42,7 @@ int main (int argc, char* argv[]){
         ("nsamps", po::value<size_t>(&total_num_samps), "total number of samples to receive")
 		("chan", po::value<size_t>(&numChannels)->default_value(1), "number of channels to record")
         ("duration", po::value<double>(&total_time)->default_value(0), "total number of seconds to receive")
-        ("spb", po::value<size_t>(&spb), "samples per buffer")
+        ("spb", po::value<double>(&spb)->default_value(1), "buffer multiplier")
         ("rate", po::value<double>(&rate)->default_value(0.0), "rate of incoming samples")
         ("freq", po::value<double>(&freq)->default_value(0.0), "RF center frequency in Hz")
 		("wait", po::value<double>(&wait_for_lock)->default_value(120), "wait time for gps lock")
@@ -285,7 +285,7 @@ int main (int argc, char* argv[]){
     std::cout << usrp->get_pp_string();
     
     // allocate buffers to receive with samples (one buffer per channel)
-    const int samplesPerBuffer = rxStream->get_max_num_samps();
+    const int samplesPerBuffer = rxStream->get_max_num_samps()*spb;
     std::vector<std::vector<std::complex<short>>> buffs (numRxChannels, std::vector<std::complex<short>> (samplesPerBuffer));
     std::cout << "Allocated " << numRxChannels << " buffers with " << samplesPerBuffer << " complex short samples" << std::endl;
 
@@ -298,9 +298,9 @@ int main (int argc, char* argv[]){
         
     // allocate one big plain short buffer per channel for the final channels to store to disk
 	int numSamplesToReceive = samplesPerBuffer;
-    if (vm.count("spb")) {
-		numSamplesToReceive = spb;
-	}
+//    if (vm.count("spb")) {
+//		numSamplesToReceive = spb;
+//	}
 	
     std::vector<std::vector<short>> fileBuffers (numRxChannels, std::vector<short> (2*numSamplesToReceive));
 
@@ -319,7 +319,7 @@ int main (int argc, char* argv[]){
     double numSamplesReceived = 0;
     uhd::rx_metadata_t rxMetadata;
     std::cout << "Starting to receive\n" << std::endl;
-    
+	    
     // Start receiving
 	// Write metadata to file		
 	std::string filePath (file);
@@ -350,6 +350,7 @@ int main (int argc, char* argv[]){
 	//metadata << boost::format("Lon: %s") % NMEA.to_pp_string() << std::endl;
 	metadata << boost::format("Duration: %i [s]") % total_time << std::endl;
 	metadata << boost::format("Total samples: %i") % totalSamplesToReceive << std::endl;
+	metadata << boost::format("Sample Type: Interleaved IQ Shorts") << std::endl;
 	metadata << boost::format("Channels: %i") % numRxChannels << std::endl;
 	for (unsigned int i = 0; i < numRxChannels; i++) {
 		metadata << boost::format("Channel %i parameters:") % i << std::endl;
