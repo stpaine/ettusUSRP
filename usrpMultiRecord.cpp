@@ -30,7 +30,7 @@ int main (int argc, char* argv[]){
 	//variables to be set by po
     std::string devAddresses, file, ref, pps, print_time;
     size_t total_num_samps, numChannels;
-    double rate, freq, gain, bw, total_time, spb, setup_time, wait_for_lock;
+    double rate, freq, gainAll, gain0, gain1, gain2, gain3, gain4, gain5, gain6, gain7, bw, total_time, spb, setup_time, wait_for_lock;
 	uhd::rx_metadata_t md;
 	
     //setup the program options
@@ -46,7 +46,15 @@ int main (int argc, char* argv[]){
         ("rate", po::value<double>(&rate)->default_value(0.0), "rate of incoming samples")
         ("freq", po::value<double>(&freq)->default_value(0.0), "RF center frequency in Hz")
 		("wait", po::value<double>(&wait_for_lock)->default_value(120), "wait time for gps lock")
-        ("gain", po::value<double>(&gain)->default_value(0.0), "gain for the RF chain")
+        ("gainAll", po::value<double>(&gainAll)->default_value(0.0), "gain for the entire RF chain")
+		("gain0", po::value<double>(&gain0), "gain for ch0")
+		("gain1", po::value<double>(&gain1), "gain for ch1")
+		("gain2", po::value<double>(&gain2), "gain for ch2")
+		("gain3", po::value<double>(&gain3), "gain for ch3")
+		("gain4", po::value<double>(&gain4), "gain for ch4")
+		("gain5", po::value<double>(&gain5), "gain for ch5")
+		("gain6", po::value<double>(&gain6), "gain for ch6")
+		("gain7", po::value<double>(&gain7), "gain for ch7")
         ("bw", po::value<double>(&bw)->default_value(0.0), "analog frontend filter bandwidth in Hz")
         ("pps", po::value<std::string>(&pps)->default_value("internal"), "pps source (gpsdo, internal, external)")
 		("ref", po::value<std::string>(&ref)->default_value("internal"), "reference source (gpsdo, internal, external)")
@@ -263,13 +271,39 @@ int main (int argc, char* argv[]){
 	} std::cout << std::endl;
 		
     //set the rf gain for each channel
-	std::cout << boost::format("Setting RX Gain: %f dB...") % gain << std::endl << std::endl;
+	if(vm.count("gain0") == false) {
+		gain0 = gainAll;
+	}
+	if(vm.count("gain1") == false) {
+		gain1 = gainAll;
+	}
+	if(vm.count("gain2") == false) {
+		gain2 = gainAll;
+	}
+	if(vm.count("gain3") == false) {
+		gain3 = gainAll;
+	}
+	if(vm.count("gain4") == false) {
+		gain4 = gainAll;
+	}
+	if(vm.count("gain5") == false) {
+		gain5 = gainAll;
+	}
+	if(vm.count("gain6") == false) {
+		gain6 = gainAll;
+	}
+	if(vm.count("gain7") == false) {
+		gain7 = gainAll;
+	}
+	
+	double gain [8] = {gain0, gain1, gain2, gain3, gain4, gain5, gain6, gain7};
 	for (unsigned int i = 0; i < numChannels; i++) {
-		usrp->set_rx_gain (gain,i);
+		std::cout << boost::format("Setting RX Gain: %f dB...") % gain[i] << std::endl << std::endl;
+		usrp->set_rx_gain (gain[i],i);
 		std::cout << boost::format("Actual RX Gain: %f dB...") % usrp->get_rx_gain(i) << std::endl;
 	} std::cout << std::endl;
- 	
-    // give the device a little bit of time to configure
+
+   // give the device a little bit of time to configure
     std::this_thread::sleep_for (std::chrono::milliseconds(100));
     
     // this will map the subdevice inputs to the input channels and create the input stream
